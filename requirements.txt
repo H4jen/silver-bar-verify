@@ -1,0 +1,21 @@
+# Silver Bar Verify — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# HTTP requests
+requests>=2.31
+
+# COMEX warehouse stocks (XLS parsing) & data analysis
+pandas>=2.0
+xlrd>=2.0.1
+
+# PDF parsing — COMEX delivery reports & Invesco bar lists
+pdfplumber>=0.10
+
+# PDF parsing — WisdomTree bar lists (low memory)
+pypdf>=4.0
+
+# TLS impersonation for Cloudflare-protected bar list downloads
+curl_cffi>=0.7
+
+# Yahoo Finance — fallback for silver price & settlements (optional but recommended)
+yfinance>=0.2
