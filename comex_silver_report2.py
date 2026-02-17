@@ -753,6 +753,45 @@ def _save_raw_json(data, filename):
         pass
 
 
+def _extract_trade_date(settlements, delivery_data, warehouse_data):
+    """Derive the canonical CME trade date from available sources.
+
+    Priority:
+      1. settlements tradeDate  (e.g. '02/13/2026')
+      2. delivery_summary business_date
+      3. warehouse_stocks report_date
+
+    Returns an ISO-style ``YYYYMMDD`` string, or ``None`` if no date found.
+    """
+    raw = None
+
+    # 1) Settlements API — most reliable
+    if settlements and isinstance(settlements, dict):
+        raw = settlements.get("tradeDate")
+
+    # 2) Delivery report business_date
+    if not raw and delivery_data and isinstance(delivery_data, dict):
+        raw = delivery_data.get("business_date")
+
+    # 3) Warehouse stocks report_date
+    if not raw and warehouse_data and isinstance(warehouse_data, dict):
+        raw = warehouse_data.get("report_date")
+
+    if not raw:
+        return None
+
+    # Normalise to YYYYMMDD.  Common CME formats:
+    #   '02/13/2026'  (MM/DD/YYYY)
+    #   '2/13/2026'   (M/DD/YYYY)
+    raw = raw.strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return None
+
+
 TREND_FILE = os.path.join(CACHE_DIR, "silver_trend_history.json")
 
 
@@ -1667,6 +1706,16 @@ def main():
         print(f"  First run — trend data will appear on next run ({len(history)} snapshot(s) saved)")
     print()
 
+    # ── Derive canonical CME trade date (synchronisation date) ──
+    trade_date_tag = _extract_trade_date(settlements, delivery_data, warehouse_data)
+    if trade_date_tag:
+        print(f"  CME trade date (sync date): {trade_date_tag}")
+    else:
+        # Fallback to scrape date if no CME date available
+        trade_date_tag = datetime.now().strftime("%Y%m%d")
+        print(f"  WARNING: Could not determine CME trade date, "
+              f"using scrape date: {trade_date_tag}")
+
     # Step 7: Generate summary
     print("[7/7] Generating summary report...")
     summary = generate_summary(contracts, delivery_summary, silver_price, warehouse_data,
@@ -1674,8 +1723,11 @@ def main():
     print()
     print(summary)
 
-    # Save report to file
-    report_path = os.path.join(CACHE_DIR, f"silver_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    # Save report to file — use trade date + scrape timestamp
+    report_path = os.path.join(
+        CACHE_DIR,
+        f"silver_report_{trade_date_tag}_{datetime.now().strftime('%H%M%S')}.txt",
+    )
     os.makedirs(CACHE_DIR, exist_ok=True)
     with open(report_path, "w") as f:
         f.write(summary)
@@ -1683,6 +1735,7 @@ def main():
 
     # Also save as JSON for programmatic use
     json_data = {
+        "trade_date": trade_date_tag,
         "generated": datetime.now().isoformat(),
         "silver_price_usd": silver_price,
         "contracts": contracts,
@@ -1694,9 +1747,9 @@ def main():
         json.dump(json_data, f, indent=2, default=str)
     print(f"  JSON data saved to: {json_path}")
 
-    # Dated archive — one per calendar day (latest run wins)
+    # Dated archive — keyed to CME trade date (one per business day)
     dated_json = os.path.join(CACHE_DIR,
-                              f"silver_contracts_{datetime.now().strftime('%Y%m%d')}.json")
+                              f"silver_contracts_{trade_date_tag}.json")
     with open(dated_json, "w") as f:
         json.dump(json_data, f, indent=2, default=str)
     print(f"  Dated JSON saved to: {dated_json}")
@@ -1704,6 +1757,7 @@ def main():
     # Save all raw input data together for archival
     raw_inputs_path = os.path.join(CACHE_DIR, "raw_inputs_latest.json")
     raw_inputs = {
+        "trade_date": trade_date_tag,
         "generated": datetime.now().isoformat(),
         "input_files": {
             "delivery_report": xls_path,

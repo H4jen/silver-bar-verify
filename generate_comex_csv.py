@@ -126,6 +126,10 @@ def _find_contracts_jsons() -> list[tuple[str, str]]:
 
     Scans ``comex_data/silver_contracts_YYYYMMDD.json``.
     Excludes ``_latest.json``.
+
+    The *date_tag* is the YYYYMMDD from the filename.  Callers should
+    prefer the ``trade_date`` field inside the JSON (the CME business
+    date) over the filename tag when determining the row date.
     """
     pattern = os.path.join(CACHE_DIR, "silver_contracts_*.json")
     results: list[tuple[str, str]] = []
@@ -181,10 +185,14 @@ def _is_target(label: str, target_labels: set[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 def _build_row(date_tag: str, data: dict) -> dict:
-    """Build a single CSV row from a silver_contracts_YYYYMMDD.json file."""
+    """Build a single CSV row from a silver_contracts_YYYYMMDD.json file.
+
+    The *date_tag* is the CME trade date (YYYYMMDD), which may come from
+    either the JSON's ``trade_date`` field or the filename.
+    """
     row: dict[str, Any] = {col: "" for col in CSV_COLUMNS}
 
-    # -- Date --
+    # -- Date (canonical CME trade date) --
     row["date"] = f"{date_tag[:4]}-{date_tag[4:6]}-{date_tag[6:8]}"
 
     # -- Price --
@@ -354,8 +362,10 @@ def generate_comex_csv(output_path: str | None = None,
     if verbose:
         print(f"  Found {len(dated_files)} data file(s)")
 
-    rows = []
-    for date_tag, filepath in dated_files:
+    # De-duplicate by CME trade date.  If multiple files contain the
+    # same trade_date the one with the latest ``generated`` timestamp wins.
+    trade_date_map: dict[str, tuple[str, dict]] = {}  # trade_date -> (generated, data)
+    for file_tag, filepath in dated_files:
         try:
             with open(filepath) as f:
                 data = json.load(f)
@@ -364,7 +374,22 @@ def generate_comex_csv(output_path: str | None = None,
                 print(f"  Warning: Could not load {filepath}: {e}")
             continue
 
-        row = _build_row(date_tag, data)
+        # Prefer the explicit trade_date field; fall back to filename tag
+        td = data.get("trade_date") or file_tag
+        generated = data.get("generated", "")
+
+        prev = trade_date_map.get(td)
+        if prev is None or generated > prev[0]:
+            trade_date_map[td] = (generated, data)
+
+    if verbose and len(trade_date_map) < len(dated_files):
+        dup = len(dated_files) - len(trade_date_map)
+        print(f"  De-duplicated {dup} file(s) with same CME trade date")
+
+    rows = []
+    for td in sorted(trade_date_map):
+        _, data = trade_date_map[td]
+        row = _build_row(td, data)
         rows.append(row)
 
     # Write CSV
