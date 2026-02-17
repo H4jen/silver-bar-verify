@@ -1724,11 +1724,12 @@ def main():
     print(summary)
 
     # Save report to file — use trade date + scrape timestamp
+    reports_dir = os.path.join(CACHE_DIR, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
     report_path = os.path.join(
-        CACHE_DIR,
+        reports_dir,
         f"silver_report_{trade_date_tag}_{datetime.now().strftime('%H%M%S')}.txt",
     )
-    os.makedirs(CACHE_DIR, exist_ok=True)
     with open(report_path, "w") as f:
         f.write(summary)
     print(f"\n  Report saved to: {report_path}")

@@ -1470,8 +1470,10 @@ def main() -> int:
 
 	# Write .txt report with date+time in filename
 	time_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+	reports_dir = os.path.join(CACHE_DIR, "reports")
+	os.makedirs(reports_dir, exist_ok=True)
 	txt_path = os.path.join(
-		CACHE_DIR, f"verification_report_{time_tag}.txt",
+		reports_dir, f"verification_report_{time_tag}.txt",
 	)
 	with open(txt_path, "w", encoding="utf-8") as fh:
 		fh.write(summary_text.lstrip("\n") + "\n")
@@ -1483,7 +1485,7 @@ def main() -> int:
 		for fund_key, delta in delta_results.items():
 			delta_text = format_delta_report(fund_key, delta)
 			delta_file = os.path.join(
-				CACHE_DIR, f"vault_delta_{fund_key}_{time_tag}.txt",
+				reports_dir, f"vault_delta_{fund_key}_{time_tag}.txt",
 			)
 			with open(delta_file, "w", encoding="utf-8") as fh:
 				fh.write(delta_text + "\n")

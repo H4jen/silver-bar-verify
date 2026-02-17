@@ -580,10 +580,12 @@ def main() -> int:
 
     # Write delta reports
     time_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    reports_dir = os.path.join(CACHE_DIR, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
     for fund_key, delta in delta_results.items():
         text = format_delta_report(fund_key, delta)
         print(text)
-        delta_file = os.path.join(CACHE_DIR, f"vault_delta_{fund_key}_{time_tag}.txt")
+        delta_file = os.path.join(reports_dir, f"vault_delta_{fund_key}_{time_tag}.txt")
         with open(delta_file, "w", encoding="utf-8") as fh:
             fh.write(text + "\n")
         print(f"  Saved: {delta_file}")
