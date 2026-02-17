@@ -450,12 +450,7 @@ def scrape_wisdomtree_metrics() -> dict[str, Any]:
         result["error"] = "all_fetch_strategies_failed"
         return result
 
-    # Save raw HTML for debugging
-    debug_html_path = os.path.join(CACHE_DIR, "wisdomtree_product_page.html")
     os.makedirs(CACHE_DIR, exist_ok=True)
-    with open(debug_html_path, "w", encoding="utf-8") as f:
-        f.write(html)
-    result["debug_html_saved"] = debug_html_path
 
     metrics = _extract_metrics_from_html(html)
     result["metrics"] = metrics

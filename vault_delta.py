@@ -541,12 +541,19 @@ def main() -> int:
         print("  Bar history databases reset.")
         return 0
 
-    # Load the latest verification JSON to get current bar lists
-    latest_json = os.path.join(CACHE_DIR, "etc_silver_inventory_verification_latest.json")
-    if not os.path.exists(latest_json):
-        print(f"  ERROR: {latest_json} not found.")
+    # Find the most recent dated verification JSON
+    import glob as _glob
+    verif_pattern = os.path.join(CACHE_DIR, "etc_silver_inventory_verification_*.json")
+    verif_files = sorted(
+        [p for p in _glob.glob(verif_pattern)
+         if "latest" not in os.path.basename(p)],
+    )
+    if not verif_files:
+        print("  ERROR: No dated verification JSON found in comex_data/.")
         print("  Run fetch_and_verify_barlists.py first to generate bar list data.")
         return 1
+    latest_json = verif_files[-1]
+    print(f"  Using: {os.path.basename(latest_json)}")
 
     with open(latest_json, "r", encoding="utf-8") as fh:
         report = json.load(fh)

@@ -1655,10 +1655,6 @@ def main():
     # Step 0: Get current silver price
     print("[0/5] Fetching current silver price...")
     silver_price = get_silver_price()
-    if silver_price is not None:
-        _save_raw_json({"silver_price_usd": silver_price,
-                        "timestamp": datetime.now().isoformat()},
-                       "silver_price_raw.json")
     print()
 
     # Step 1: Download delivery report (YTD)
@@ -1734,7 +1730,7 @@ def main():
         f.write(summary)
     print(f"\n  Report saved to: {report_path}")
 
-    # Also save as JSON for programmatic use
+    # Save JSON — one file per CME trade date (the authoritative archive)
     json_data = {
         "trade_date": trade_date_tag,
         "generated": datetime.now().isoformat(),
@@ -1743,39 +1739,11 @@ def main():
         "delivery_summary": delivery_summary,
         "warehouse_stocks": warehouse_data,
     }
-    json_path = os.path.join(CACHE_DIR, "silver_contracts_latest.json")
-    with open(json_path, "w") as f:
-        json.dump(json_data, f, indent=2, default=str)
-    print(f"  JSON data saved to: {json_path}")
-
-    # Dated archive — keyed to CME trade date (one per business day)
     dated_json = os.path.join(CACHE_DIR,
                               f"silver_contracts_{trade_date_tag}.json")
     with open(dated_json, "w") as f:
         json.dump(json_data, f, indent=2, default=str)
-    print(f"  Dated JSON saved to: {dated_json}")
-
-    # Save all raw input data together for archival
-    raw_inputs_path = os.path.join(CACHE_DIR, "raw_inputs_latest.json")
-    raw_inputs = {
-        "trade_date": trade_date_tag,
-        "generated": datetime.now().isoformat(),
-        "input_files": {
-            "delivery_report": xls_path,
-            "warehouse_stocks": stocks_path,
-        },
-        "raw_api_data": {
-            "silver_price_usd": silver_price,
-            "settlements": settlements,
-        },
-        "parsed_data": {
-            "delivery_data": delivery_data,
-            "warehouse_data": warehouse_data,
-        },
-    }
-    with open(raw_inputs_path, "w") as f:
-        json.dump(raw_inputs, f, indent=2, default=str)
-    print(f"  Raw input data saved to: {raw_inputs_path}")
+    print(f"  JSON data saved to: {dated_json}")
 
 
 if __name__ == "__main__":

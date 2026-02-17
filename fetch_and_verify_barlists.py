@@ -1069,8 +1069,8 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"--output-json",
-		default=os.path.join(CACHE_DIR, "etc_silver_inventory_verification_latest.json"),
-		help="Output JSON report path",
+		default=None,
+		help="Output JSON report path (default: dated file in comex_data/)",
 	)
 	parser.add_argument("--invesco-pdf", default=None, help="Local override path for Invesco bar-list PDF")
 	parser.add_argument("--wisdomtree-pdf", default=None, help="Local override path for WisdomTree bar-list PDF")
@@ -1453,14 +1453,16 @@ def main() -> int:
 		"runtime_seconds": round(time.time() - started, 2),
 	}
 
-	write_json(args.output_json, report)
-
-	# Also save a date-stamped copy for historical comparison
+	# Save date-stamped copy (the authoritative archive)
 	date_tag = datetime.now().strftime("%Y%m%d")
 	dated_path = os.path.join(
 		CACHE_DIR, f"etc_silver_inventory_verification_{date_tag}.json"
 	)
 	write_json(dated_path, report)
+
+	# If --output-json was explicitly given, save an extra copy there
+	if args.output_json is not None:
+		write_json(args.output_json, report)
 
 	summary_text = _print_summary_table(
 		report, doc_sync=doc_sync_results,
@@ -1491,8 +1493,9 @@ def main() -> int:
 				fh.write(delta_text + "\n")
 			delta_paths.append(delta_file)
 
-	print(f"\nSaved JSON report:  {args.output_json}")
-	print(f"Saved dated copy:   {dated_path}")
+	print(f"\nSaved JSON report:  {dated_path}")
+	if args.output_json is not None:
+		print(f"Saved extra copy:   {args.output_json}")
 	print(f"Saved text report:  {txt_path}")
 	for dp in delta_paths:
 		print(f"Saved delta report: {dp}")
