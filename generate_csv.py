@@ -90,56 +90,64 @@ def _find_verification_jsons() -> list[tuple[str, str]]:
     return results
 
 
-def _find_metrics_for_date(date_tag: str) -> dict[str, Any]:
-    """Find the metrics file that matches *date_tag* exactly.
+def _normalise_date_tag(raw_date: str | None) -> str:
+    """Turn 'DD Month YYYY' or 'YYYY-MM-DD' into YYYYMMDD.  Returns '' on failure."""
+    if not raw_date:
+        return ""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw_date)
+    if m:
+        return f"{m.group(1)}{m.group(2)}{m.group(3)}"
+    try:
+        dt = datetime.strptime(raw_date, "%d %B %Y")
+        return dt.strftime("%Y%m%d")
+    except ValueError:
+        pass
+    return ""
 
-    Only same-day metrics are used.  If no file matches the exact date,
-    an empty dict is returned so the row is flagged as
-    ``insufficient_fund_metrics``.
+
+def _extract_barlist_date(fund_result: dict[str, Any]) -> str:
+    """Get the bar-list effective date (YYYYMMDD) from a fund result."""
+    parse = fund_result.get("parse") or {}
+    hm = parse.get("header_metadata") or {}
+    return _normalise_date_tag(hm.get("as_of_date", ""))
+
+
+def _build_metrics_index() -> dict[str, dict[str, dict[str, Any]]]:
+    """Scan per-fund metrics files and index by data date.
+
+    Filename convention: ``etc_fund_metrics_<fund>.json`` (canonical)
+    and ``etc_fund_metrics_<fund>_YYYYMMDD.json`` (archives).
+    Each file is a flat dict (no wrapper key).
+
+    Returns ``{fund_key: {yyyymmdd: fund_metrics_dict}}``.
+    When multiple files for the same fund + date exist, the last one
+    (alphabetically) wins — the canonical file sorts after archives.
     """
-    pattern = os.path.join(CACHE_DIR, "etc_fund_metrics*.json")
-    candidates: list[tuple[str, str]] = []
-    for path in glob.glob(pattern):
-        basename = os.path.basename(path)
-        m = re.search(r"_(\d{8})\.json$", basename)
-        if m:
-            candidates.append((m.group(1), path))
-        elif basename == "etc_fund_metrics.json":
-            # The canonical (undated) file — extract as_of from content
+    KNOWN_FUNDS = ("invesco", "wisdomtree")
+    index: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+
+    for fund_key in KNOWN_FUNDS:
+        canonical = os.path.join(CACHE_DIR, f"etc_fund_metrics_{fund_key}.json")
+        name, ext = os.path.splitext(canonical)
+        pattern = f"{name}_*{ext}"
+
+        paths = sorted(glob.glob(pattern))
+        if os.path.exists(canonical) and canonical not in paths:
+            paths.append(canonical)
+
+        for path in paths:
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                for fund_data in data.values():
-                    as_of = fund_data.get("as_of", "")
-                    m2 = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(as_of))
-                    if m2:
-                        tag = m2.group(1) + m2.group(2) + m2.group(3)
-                        candidates.append((tag, path))
-                        break
             except Exception:
-                pass
+                continue
 
-    if not candidates:
-        print(f"  ERROR: No fund metrics files found at all in {CACHE_DIR}",
-              file=sys.stderr)
-        return {}
+            as_of = data.get("as_of", "")
+            date_tag = as_of.replace("-", "")
+            if len(date_tag) == 8 and date_tag.isdigit():
+                index[fund_key][date_tag] = data
 
-    # Strict same-day match only
-    for tag, path in candidates:
-        if tag == date_tag:
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    return json.load(fh)
-            except Exception as exc:
-                print(f"  ERROR: Fund metrics file {path} exists but could not "
-                      f"be read: {exc}", file=sys.stderr)
-                return {}
-
-    available = sorted(set(t for t, _ in candidates))
-    print(f"  ERROR: No same-day fund metrics for date {date_tag}. "
-          f"Available metric dates: {', '.join(available)}",
-          file=sys.stderr)
-    return {}
+    return dict(index)
 
 
 def _load_bar_history(fund_key: str) -> dict[str, Any]:
@@ -228,12 +236,15 @@ def _build_row(
     date_tag: str,
     fund_key: str,
     fund_result: dict[str, Any],
-    metrics: dict[str, Any],
+    fund_metrics: dict[str, Any],
     delta: dict[str, int | float] | None,
     reentry_stats: dict[str, int],
     prev_result: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], bool]:
     """Build a single CSV row dict for one fund on one date.
+
+    *fund_metrics* is the already-resolved per-fund metrics dict
+    (empty dict when no same-day match exists).
 
     Returns ``(row_dict, has_error)``.
     """
@@ -263,15 +274,13 @@ def _build_row(
     if physical_oz and expected_oz and expected_oz > 0:
         collateral_pct = round(physical_oz / expected_oz * 100, 4)
 
-    # Fund metrics — require same-day data
-    fund_metrics = metrics.get(fund_key, {})
-    has_metrics_error = False
-    if not fund_metrics:
+    # Fund metrics — already resolved by caller (strict same-day)
+    has_metrics_error = not fund_metrics
+    if has_metrics_error:
         print(f"  ERROR: No fund metrics for {fund_key} on "
               f"{date_tag[:4]}-{date_tag[4:6]}-{date_tag[6:8]}  "
               f"— row will have status=insufficient_fund_metrics",
               file=sys.stderr)
-        has_metrics_error = True
     certs = fund_metrics.get("certificates_outstanding")
     entitlement = fund_metrics.get("entitlement_oz_per_certificate")
     nav = fund_metrics.get("nav_usd")
@@ -363,6 +372,13 @@ def generate_csv(
     if verbose:
         print(f"  Found {len(verification_files)} verification snapshot(s)")
 
+    # Build a per-fund per-date metrics index
+    metrics_index = _build_metrics_index()
+    if verbose:
+        total_entries = sum(len(v) for v in metrics_index.values())
+        print(f"  Metrics index: {total_entries} fund-date entries across "
+              f"{len(metrics_index)} fund(s)")
+
     # Load bar-history DBs for re-entry stats
     histories: dict[str, dict[str, Any]] = {}
     for fund in funds:
@@ -389,12 +405,24 @@ def generate_csv(
             error_count += 1
             continue
 
-        metrics = _find_metrics_for_date(date_tag)
-
         for fund_key in funds:
             fund_result = results.get(fund_key)
             if not fund_result:
                 continue
+
+            # Determine the bar-list effective date for this fund
+            barlist_date = _extract_barlist_date(fund_result)
+            if not barlist_date:
+                barlist_date = date_tag  # fall back to verification file date
+
+            # Strict same-day metric lookup for this specific fund
+            fund_metrics = metrics_index.get(fund_key, {}).get(barlist_date, {})
+            if not fund_metrics:
+                available = sorted(metrics_index.get(fund_key, {}).keys())
+                avail_str = ", ".join(available) if available else "(none)"
+                print(f"  ERROR: No same-day fund metrics for {fund_key} "
+                      f"barlist date {barlist_date}. Available: {avail_str}",
+                      file=sys.stderr)
 
             # Delta from previous bar list
             delta = None
@@ -412,7 +440,7 @@ def generate_csv(
                 date_tag=date_tag,
                 fund_key=fund_key,
                 fund_result=fund_result,
-                metrics=metrics,
+                fund_metrics=fund_metrics,
                 delta=delta,
                 reentry_stats=reentry,
                 prev_result=prev_fund,

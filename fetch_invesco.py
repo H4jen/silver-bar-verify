@@ -31,7 +31,7 @@ from curl_cffi import requests as cffi_requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, "comex_data")
-METRICS_FILE = os.path.join(CACHE_DIR, "etc_fund_metrics.json")
+METRICS_FILE = os.path.join(CACHE_DIR, "etc_fund_metrics_invesco.json")
 
 ISIN = "IE00B43VDT70"
 LOCALE = "en_SE"
@@ -112,8 +112,8 @@ def fetch_invesco_metrics() -> dict[str, Any]:
 #  Metrics file update
 # ---------------------------------------------------------------------------
 
-def _archive_metrics(metrics_path: str) -> str | None:
-    """Save a date-stamped copy of the metrics file before overwriting.
+def _archive_metrics(metrics_path: str, data_date: str) -> str | None:
+    """Archive the current metrics file tagged by *data_date* (YYYY-MM-DD).
 
     Returns the archive path, or None if no archive was needed.
     """
@@ -124,16 +124,7 @@ def _archive_metrics(metrics_path: str) -> str | None:
         old_data = f.read()
 
     old_hash = hashlib.sha256(old_data).hexdigest()
-
-    # Use the as_of date from the existing metrics if available
-    try:
-        existing = json.loads(old_data)
-        # Find the earliest as_of from any provider
-        dates = [v.get("as_of", "") for v in existing.values() if isinstance(v, dict)]
-        dates = [d for d in dates if d]
-        tag = min(dates).replace("-", "") if dates else datetime.now().strftime("%Y%m%d")
-    except Exception:
-        tag = datetime.now().strftime("%Y%m%d")
+    tag = data_date.replace("-", "")
 
     name, ext = os.path.splitext(metrics_path)
     archive_path = f"{name}_{tag}{ext}"
@@ -159,19 +150,28 @@ def update_metrics_file(
     scraped: dict[str, Any],
     metrics_path: str = METRICS_FILE,
 ) -> bool:
-    """Merge scraped Invesco metrics into the existing etc_fund_metrics.json."""
+    """Write scraped Invesco metrics to the per-fund metrics file.
+
+    File: ``etc_fund_metrics_invesco.json``  (flat dict, no wrapper key).
+    Before overwriting, the old file is archived as
+    ``etc_fund_metrics_invesco_YYYYMMDD.json`` using the old data date.
+    """
     if not scraped:
         print("No metrics to update — scrape was not successful.", file=sys.stderr)
         return False
 
-    existing: dict[str, Any] = {}
+    # Archive the old file using its data date
     if os.path.exists(metrics_path):
-        _archive_metrics(metrics_path)
-        with open(metrics_path, "r", encoding="utf-8") as f:
-            existing = json.load(f)
+        try:
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            old_date = old.get("as_of", "")
+        except Exception:
+            old_date = ""
+        if old_date:
+            _archive_metrics(metrics_path, old_date)
 
-    inv = existing.get("invesco", {})
-
+    data: dict[str, Any] = {}
     for key in (
         "certificates_outstanding",
         "entitlement_oz_per_certificate",
@@ -181,19 +181,19 @@ def update_metrics_file(
         "fixed_fee_pct",
     ):
         if key in scraped:
-            inv[key] = scraped[key]
+            data[key] = scraped[key]
 
-    inv["as_of"] = scraped.get("as_of", datetime.now().strftime("%Y-%m-%d"))
-    inv["source_note"] = (
-        f"Auto-scraped from Invesco API ({inv['as_of']}) "
+    data["as_of"] = scraped.get("as_of", datetime.now().strftime("%Y-%m-%d"))
+    data["scraped_utc"] = datetime.now(timezone.utc).isoformat()
+    data["source_note"] = (
+        f"Auto-scraped from Invesco API (data date: {data['as_of']}, "
+        f"scraped: {datetime.now().strftime('%Y-%m-%d')}) "
         f"via dng-api.invesco.com"
     )
 
-    existing["invesco"] = inv
-
     os.makedirs(os.path.dirname(metrics_path) or ".", exist_ok=True)
     with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(existing, f, indent=2)
+        json.dump(data, f, indent=2)
         f.write("\n")
 
     print(f"Updated {metrics_path}", file=sys.stderr)

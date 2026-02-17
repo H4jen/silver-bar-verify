@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -249,10 +250,16 @@ def find_all_barlists(fund_key: str) -> list[str]:
 	return paths
 
 
-def find_all_metrics_files() -> list[str]:
-	"""Return all metrics JSON files (dated archives + current), oldest first."""
-	canonical = os.path.join(CACHE_DIR, "etc_fund_metrics.json")
+def _metrics_file_for_fund(fund_key: str) -> str:
+	"""Return the canonical per-fund metrics file path."""
+	return os.path.join(CACHE_DIR, f"etc_fund_metrics_{fund_key}.json")
+
+
+def find_all_metrics_files_for_fund(fund_key: str) -> list[str]:
+	"""Return all metrics files for *fund_key* (archives + current), oldest first."""
+	canonical = _metrics_file_for_fund(fund_key)
 	name, ext = os.path.splitext(canonical)
+	# Archives: etc_fund_metrics_invesco_20260217.json, …_20260217_1.json
 	pattern = f"{name}_*{ext}"
 	paths = sorted(glob.glob(pattern))
 	if os.path.exists(canonical) and canonical not in paths:
@@ -261,52 +268,66 @@ def find_all_metrics_files() -> list[str]:
 
 
 def _metrics_date_tag(metrics_path: str) -> str:
-	"""Extract date tag from a metrics filename like etc_fund_metrics_20260213.json."""
+	"""Extract data-date tag from a per-fund metrics file.
+
+	Filename convention: ``etc_fund_metrics_<fund>_YYYYMMDD.json``
+	Falls back to reading ``as_of`` from file content.
+	"""
 	base = os.path.basename(metrics_path)
 	m = re.search(r"_(\d{8})(?:_\d+)?\.json$", base)
 	if m:
 		return m.group(1)
-	# For the canonical file, read the as_of from inside
+	# Canonical file — read as_of from content (flat dict)
 	try:
 		with open(metrics_path, "r", encoding="utf-8") as f:
 			data = json.load(f)
-		dates = [v.get("as_of", "") for v in data.values() if isinstance(v, dict)]
-		dates = [d.replace("-", "") for d in dates if d]
-		return min(dates) if dates else "99999999"
+		as_of = data.get("as_of", "")
+		if as_of:
+			return as_of.replace("-", "")
 	except Exception:
-		return "99999999"
+		pass
+	return "99999999"
 
 
-def find_closest_metrics(barlist_date_tag: str) -> dict[str, Any]:
-	"""Load the metrics file whose date matches *barlist_date_tag* exactly.
+def find_metrics_for_fund(fund_key: str, barlist_date_tag: str) -> dict[str, Any]:
+	"""Load the per-fund metrics whose data date matches *barlist_date_tag* exactly.
 
-	Returns the parsed metrics dict (same structure as etc_fund_metrics.json).
-	Returns empty dict and logs an ERROR if no same-day metrics exist.
+	Returns the flat metrics dict, or empty dict if no same-day match.
 	"""
-	all_files = find_all_metrics_files()
+	all_files = find_all_metrics_files_for_fund(fund_key)
 	if not all_files:
-		print(f"  ERROR: No fund metrics files found at all", file=sys.stderr)
+		print(f"  ERROR: No metrics files found for {fund_key}", file=sys.stderr)
 		return {}
 
-	# Build (date_tag, path) pairs
 	tagged = [(_metrics_date_tag(f), f) for f in all_files]
 
-	# Strict same-day match only
 	for tag, path in tagged:
 		if tag == barlist_date_tag:
 			try:
 				with open(path, "r", encoding="utf-8") as f:
 					return json.load(f)
 			except Exception as exc:
-				print(f"  ERROR: Metrics file {path} exists but could not "
-				      f"be read: {exc}", file=sys.stderr)
+				print(f"  ERROR: Metrics file {path} could not be read: {exc}",
+				      file=sys.stderr)
 				return {}
 
 	available = sorted(set(t for t, _ in tagged))
-	print(f"  ERROR: No same-day fund metrics for bar-list date "
+	print(f"  ERROR: No same-day metrics for {fund_key} barlist date "
 	      f"{barlist_date_tag}. Available: {', '.join(available)}",
 	      file=sys.stderr)
 	return {}
+
+
+def load_fund_metrics(fund_key: str) -> dict[str, Any]:
+	"""Load the canonical (latest) per-fund metrics file.
+
+	Returns the flat metrics dict, or empty dict if missing.
+	"""
+	path = _metrics_file_for_fund(fund_key)
+	if not os.path.exists(path):
+		return {}
+	with open(path, "r", encoding="utf-8") as f:
+		return json.load(f)
 
 
 def resolve_barlist_pdf(
@@ -1042,9 +1063,9 @@ def verify_fund(
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="Verify silver ETC bar lists against fund metrics")
 	parser.add_argument(
-		"--metrics-json",
-		default=os.path.join(CACHE_DIR, "etc_fund_metrics.json"),
-		help="JSON file with fund metrics for expected silver calculations",
+		"--metrics-dir",
+		default=CACHE_DIR,
+		help="Directory containing per-fund metrics files (etc_fund_metrics_<fund>.json)",
 	)
 	parser.add_argument(
 		"--output-json",
@@ -1307,33 +1328,25 @@ def main() -> int:
 		except Exception as e:
 			print(f"\n  WARNING: Document sync failed: {e}")
 
-	try:
-		all_metrics = load_metrics_file(args.metrics_json)
-	except FileNotFoundError:
-		print(f"  ERROR: Metrics file not found: {args.metrics_json}",
-		      file=sys.stderr)
-		print(f"  Run 'python fetch_invesco.py --update-metrics' and "
-		      f"'python fetch_wisdomtree.py --update-metrics' first, or use "
-		      f"run_all.py which does this automatically.", file=sys.stderr)
-		return 1
-
 	report: dict[str, Any] = {
 		"generated_utc": now_iso(),
 		"script": "verify_silver_etcs.py",
 		"funds_requested": args.funds,
 		"inputs": {
-			"metrics_json": args.metrics_json,
+			"metrics_dir": args.metrics_dir,
 		},
 		"results": {},
 		"summary": {},
 	}
 
 	for fund in args.funds:
-		metrics_for_fund = all_metrics.get(fund, {})
+		metrics_for_fund = load_fund_metrics(fund)
 		if not metrics_for_fund:
-			print(f"  ERROR: No metrics data for fund '{fund}' in "
-			      f"{args.metrics_json} — verification will have "
+			print(f"  ERROR: No metrics file for fund '{fund}' in "
+			      f"{args.metrics_dir} — verification will have "
 			      f"status=insufficient_fund_metrics", file=sys.stderr)
+			print(f"  Run 'python fetch_{fund}.py --update-metrics' first, or "
+			      f"use run_all.py which does this automatically.", file=sys.stderr)
 			return 1
 		result = verify_fund(
 			fund_key=fund,
@@ -1378,9 +1391,9 @@ def main() -> int:
 	report["historical"] = {}
 	if args.all_barlists:
 		print("\n  Analysing historical bar lists ...")
-		metrics_files = find_all_metrics_files()
-		print(f"    Found {len(metrics_files)} metrics file(s) for date matching")
 		for fund in args.funds:
+			metrics_files = find_all_metrics_files_for_fund(fund)
+			print(f"    {fund}: found {len(metrics_files)} metrics file(s)")
 			canonical = DEFAULT_FUNDS[fund]["local_pdf"]
 			all_pdfs = find_all_barlists(fund)
 			# Exclude the canonical file (already processed above)
@@ -1396,9 +1409,8 @@ def main() -> int:
 				bl_match = re.search(r"_(\d{8})", bl_base)
 				bl_date_tag = bl_match.group(1) if bl_match else "99999999"
 
-				# Find the same-day metrics file for this bar-list date
-				hist_metrics = find_closest_metrics(bl_date_tag)
-				hist_fund_metrics = hist_metrics.get(fund, {})
+				# Find the same-day metrics for this fund + bar-list date
+				hist_fund_metrics = find_metrics_for_fund(fund, bl_date_tag)
 				if not hist_fund_metrics:
 					print(f"    ERROR: No metrics for {fund} on {bl_date_tag} "
 					      f"— historical analysis will be incomplete",
