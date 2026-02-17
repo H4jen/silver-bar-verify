@@ -278,35 +278,35 @@ def _metrics_date_tag(metrics_path: str) -> str:
 
 
 def find_closest_metrics(barlist_date_tag: str) -> dict[str, Any]:
-	"""Load the metrics file whose date is closest to a bar-list date tag (YYYYMMDD).
+	"""Load the metrics file whose date matches *barlist_date_tag* exactly.
 
 	Returns the parsed metrics dict (same structure as etc_fund_metrics.json).
-	Falls back to the latest (canonical) metrics file if no close match exists.
+	Returns empty dict and logs an ERROR if no same-day metrics exist.
 	"""
 	all_files = find_all_metrics_files()
 	if not all_files:
+		print(f"  ERROR: No fund metrics files found at all", file=sys.stderr)
 		return {}
 
 	# Build (date_tag, path) pairs
-	tagged = [(f, _metrics_date_tag(f)) for f in all_files]
+	tagged = [(_metrics_date_tag(f), f) for f in all_files]
 
-	# Find closest by date distance
-	best_path = all_files[-1]  # default to latest
-	best_dist = abs(int(barlist_date_tag) - int(_metrics_date_tag(best_path)))
-	for path, tag in tagged:
-		try:
-			dist = abs(int(barlist_date_tag) - int(tag))
-		except ValueError:
-			continue
-		if dist < best_dist:
-			best_dist = dist
-			best_path = path
+	# Strict same-day match only
+	for tag, path in tagged:
+		if tag == barlist_date_tag:
+			try:
+				with open(path, "r", encoding="utf-8") as f:
+					return json.load(f)
+			except Exception as exc:
+				print(f"  ERROR: Metrics file {path} exists but could not "
+				      f"be read: {exc}", file=sys.stderr)
+				return {}
 
-	try:
-		with open(best_path, "r", encoding="utf-8") as f:
-			return json.load(f)
-	except Exception:
-		return {}
+	available = sorted(set(t for t, _ in tagged))
+	print(f"  ERROR: No same-day fund metrics for bar-list date "
+	      f"{barlist_date_tag}. Available: {', '.join(available)}",
+	      file=sys.stderr)
+	return {}
 
 
 def resolve_barlist_pdf(
@@ -1310,7 +1310,12 @@ def main() -> int:
 	try:
 		all_metrics = load_metrics_file(args.metrics_json)
 	except FileNotFoundError:
-		all_metrics = {}
+		print(f"  ERROR: Metrics file not found: {args.metrics_json}",
+		      file=sys.stderr)
+		print(f"  Run 'python fetch_invesco.py --update-metrics' and "
+		      f"'python fetch_wisdomtree.py --update-metrics' first, or use "
+		      f"run_all.py which does this automatically.", file=sys.stderr)
+		return 1
 
 	report: dict[str, Any] = {
 		"generated_utc": now_iso(),
@@ -1325,6 +1330,11 @@ def main() -> int:
 
 	for fund in args.funds:
 		metrics_for_fund = all_metrics.get(fund, {})
+		if not metrics_for_fund:
+			print(f"  ERROR: No metrics data for fund '{fund}' in "
+			      f"{args.metrics_json} — verification will have "
+			      f"status=insufficient_fund_metrics", file=sys.stderr)
+			return 1
 		result = verify_fund(
 			fund_key=fund,
 			local_pdf=args.invesco_pdf if fund == "invesco" else args.wisdomtree_pdf,
@@ -1386,9 +1396,13 @@ def main() -> int:
 				bl_match = re.search(r"_(\d{8})", bl_base)
 				bl_date_tag = bl_match.group(1) if bl_match else "99999999"
 
-				# Find the closest metrics file for this bar-list date
+				# Find the same-day metrics file for this bar-list date
 				hist_metrics = find_closest_metrics(bl_date_tag)
 				hist_fund_metrics = hist_metrics.get(fund, {})
+				if not hist_fund_metrics:
+					print(f"    ERROR: No metrics for {fund} on {bl_date_tag} "
+					      f"— historical analysis will be incomplete",
+					      file=sys.stderr)
 				metrics_tag = _metrics_date_tag(
 					next((f for f in metrics_files
 						  if _metrics_date_tag(f).replace("-", "") <= bl_date_tag),
@@ -1472,10 +1486,15 @@ def main() -> int:
 	# Regenerate time-series CSV
 	try:
 		from generate_csv import generate_csv
-		csv_path = generate_csv(funds=args.funds)
+		csv_path, csv_errors = generate_csv(funds=args.funds)
 		print(f"Saved CSV report:   {csv_path}")
+		if csv_errors:
+			print(f"\n  ERROR: CSV generation had {csv_errors} data correlation "
+			      f"error(s)", file=sys.stderr)
+			return 1
 	except Exception as exc:
-		print(f"\n  WARNING: CSV generation failed: {exc}")
+		print(f"\n  ERROR: CSV generation failed: {exc}", file=sys.stderr)
+		return 1
 
 	return 0
 

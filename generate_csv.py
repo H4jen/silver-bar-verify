@@ -91,7 +91,12 @@ def _find_verification_jsons() -> list[tuple[str, str]]:
 
 
 def _find_metrics_for_date(date_tag: str) -> dict[str, Any]:
-    """Find the closest metrics file at or before *date_tag* and return it."""
+    """Find the metrics file that matches *date_tag* exactly.
+
+    Only same-day metrics are used.  If no file matches the exact date,
+    an empty dict is returned so the row is flagged as
+    ``insufficient_fund_metrics``.
+    """
     pattern = os.path.join(CACHE_DIR, "etc_fund_metrics*.json")
     candidates: list[tuple[str, str]] = []
     for path in glob.glob(pattern):
@@ -104,7 +109,6 @@ def _find_metrics_for_date(date_tag: str) -> dict[str, Any]:
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                # Use the earliest fund's as_of as a date proxy
                 for fund_data in data.values():
                     as_of = fund_data.get("as_of", "")
                     m2 = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(as_of))
@@ -116,19 +120,26 @@ def _find_metrics_for_date(date_tag: str) -> dict[str, Any]:
                 pass
 
     if not candidates:
+        print(f"  ERROR: No fund metrics files found at all in {CACHE_DIR}",
+              file=sys.stderr)
         return {}
 
-    candidates.sort(key=lambda x: x[0])
-    # Pick the one closest at or before date_tag
-    best_path = candidates[0][1]
+    # Strict same-day match only
     for tag, path in candidates:
-        if tag <= date_tag:
-            best_path = path
-    try:
-        with open(best_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return {}
+        if tag == date_tag:
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    return json.load(fh)
+            except Exception as exc:
+                print(f"  ERROR: Fund metrics file {path} exists but could not "
+                      f"be read: {exc}", file=sys.stderr)
+                return {}
+
+    available = sorted(set(t for t, _ in candidates))
+    print(f"  ERROR: No same-day fund metrics for date {date_tag}. "
+          f"Available metric dates: {', '.join(available)}",
+          file=sys.stderr)
+    return {}
 
 
 def _load_bar_history(fund_key: str) -> dict[str, Any]:
@@ -221,8 +232,11 @@ def _build_row(
     delta: dict[str, int | float] | None,
     reentry_stats: dict[str, int],
     prev_result: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Build a single CSV row dict for one fund on one date."""
+) -> tuple[dict[str, Any], bool]:
+    """Build a single CSV row dict for one fund on one date.
+
+    Returns ``(row_dict, has_error)``.
+    """
     ver = fund_result.get("verification") or {}
     aggr = fund_result.get("aggregates") or {}
     parse = fund_result.get("parse") or {}
@@ -249,8 +263,15 @@ def _build_row(
     if physical_oz and expected_oz and expected_oz > 0:
         collateral_pct = round(physical_oz / expected_oz * 100, 4)
 
-    # Fund metrics
+    # Fund metrics — require same-day data
     fund_metrics = metrics.get(fund_key, {})
+    has_metrics_error = False
+    if not fund_metrics:
+        print(f"  ERROR: No fund metrics for {fund_key} on "
+              f"{date_tag[:4]}-{date_tag[4:6]}-{date_tag[6:8]}  "
+              f"— row will have status=insufficient_fund_metrics",
+              file=sys.stderr)
+        has_metrics_error = True
     certs = fund_metrics.get("certificates_outstanding")
     entitlement = fund_metrics.get("entitlement_oz_per_certificate")
     nav = fund_metrics.get("nav_usd")
@@ -299,7 +320,7 @@ def _build_row(
         "bars_seen_3_plus": reentry_stats.get("seen_3"),
         "bars_seen_4_plus": reentry_stats.get("seen_4"),
         "bars_seen_5_plus": reentry_stats.get("seen_5"),
-    }
+    }, has_metrics_error
 
 
 def _round_or_none(val: Any, digits: int) -> Any:
@@ -319,20 +340,25 @@ def generate_csv(
     output_path: str | None = None,
     funds: list[str] | None = None,
     verbose: bool = True,
-) -> str:
+) -> tuple[str, int]:
     """Scan comex_data/ verification JSONs and produce a time-series CSV.
 
-    Returns the output file path.
+    Returns ``(output_file_path, error_count)``.
+    An *error_count* > 0 means at least one row had missing or
+    mismatched day-to-day correlated data (e.g. no same-day fund metrics).
     """
     if output_path is None:
         output_path = os.path.join(CACHE_DIR, "silver_etcs_timeseries.csv")
     if funds is None:
         funds = ["invesco", "wisdomtree"]
 
+    error_count = 0
+
     verification_files = _find_verification_jsons()
     if not verification_files:
-        print("  No dated verification JSONs found in comex_data/")
-        return output_path
+        print("  ERROR: No dated verification JSONs found in comex_data/",
+              file=sys.stderr)
+        return output_path, 1
 
     if verbose:
         print(f"  Found {len(verification_files)} verification snapshot(s)")
@@ -351,11 +377,18 @@ def generate_csv(
             with open(filepath, "r", encoding="utf-8") as fh:
                 report = json.load(fh)
         except Exception as exc:
-            if verbose:
-                print(f"  WARNING: Could not read {filepath}: {exc}")
+            print(f"  ERROR: Could not read verification file {filepath}: {exc}",
+                  file=sys.stderr)
+            error_count += 1
             continue
 
         results = report.get("results", {})
+        if not results:
+            print(f"  ERROR: Verification file {os.path.basename(filepath)} "
+                  f"contains no fund results", file=sys.stderr)
+            error_count += 1
+            continue
+
         metrics = _find_metrics_for_date(date_tag)
 
         for fund_key in funds:
@@ -375,7 +408,7 @@ def generate_csv(
             # Re-entry stats from history DB
             reentry = _count_reentry_stats(histories[fund_key], date_tag)
 
-            row = _build_row(
+            row, row_has_error = _build_row(
                 date_tag=date_tag,
                 fund_key=fund_key,
                 fund_result=fund_result,
@@ -384,6 +417,8 @@ def generate_csv(
                 reentry_stats=reentry,
                 prev_result=prev_fund,
             )
+            if row_has_error:
+                error_count += 1
             rows.append(row)
             prev_results[fund_key] = fund_result
 
@@ -399,8 +434,11 @@ def generate_csv(
         print(f"  Wrote {len(rows)} rows ({len(set(r['date'] for r in rows))} dates,"
               f" {len(set(r['fund'] for r in rows))} funds)")
         print(f"  Output: {output_path}")
+        if error_count:
+            print(f"  ERRORS: {error_count} data correlation error(s) detected",
+                  file=sys.stderr)
 
-    return output_path
+    return output_path, error_count
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +469,11 @@ def main() -> int:
     args = _parse_args()
     print("Silver ETC Time-Series CSV Generator")
     print("=" * 40)
-    generate_csv(output_path=args.output, funds=args.funds)
+    _path, errors = generate_csv(output_path=args.output, funds=args.funds)
+    if errors:
+        print(f"\nFAILED: {errors} error(s) — see ERROR messages above.",
+              file=sys.stderr)
+        return 1
     return 0
 
 

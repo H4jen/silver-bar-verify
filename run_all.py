@@ -57,24 +57,38 @@ OPTIONAL_PACKAGES = [
 STEPS = [
     {
         "num": 1,
+        "name": "Fetch Invesco Metrics",
+        "script": "fetch_invesco.py",
+        "args": ["--update-metrics"],
+        "description": "Scrape Invesco fund metrics and update etc_fund_metrics.json",
+    },
+    {
+        "num": 2,
+        "name": "Fetch WisdomTree Metrics",
+        "script": "fetch_wisdomtree.py",
+        "args": ["--update-metrics"],
+        "description": "Scrape WisdomTree fund metrics and update etc_fund_metrics.json",
+    },
+    {
+        "num": 3,
         "name": "Silver ETC Verification",
         "script": "verify_silver_etcs.py",
         "description": "Fetch ETC data, download bar lists, verify inventories",
     },
     {
-        "num": 2,
+        "num": 4,
         "name": "COMEX Silver Report",
         "script": "comex_silver_report2.py",
         "description": "Fetch COMEX delivery reports, warehouse stocks, settlements",
     },
     {
-        "num": 3,
+        "num": 5,
         "name": "ETC Time-Series CSV",
         "script": "generate_csv.py",
         "description": "Generate silver_etcs_timeseries.csv from verification data",
     },
     {
-        "num": 4,
+        "num": 6,
         "name": "COMEX Time-Series CSV",
         "script": "generate_comex_csv.py",
         "description": "Generate comex_silver_timeseries.csv from COMEX data",
@@ -129,10 +143,12 @@ def run_step(step: dict) -> tuple[bool, float]:
         print(f"  ERROR: Script not found: {script_path}")
         return False, 0.0
 
+    cmd = [sys.executable, script_path] + step.get("args", [])
+
     start = time.time()
     try:
         result = subprocess.run(
-            [sys.executable, script_path],
+            cmd,
             cwd=SCRIPT_DIR,
             timeout=600,  # 10 minute timeout per step
         )
@@ -159,11 +175,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--skip", type=int, nargs="+", metavar="N",
-        help="Step number(s) to skip (1-4)",
+        help="Step number(s) to skip (1-6)",
     )
     parser.add_argument(
         "--only", type=int, nargs="+", metavar="N",
-        help="Run only these step number(s) (1-4)",
+        help="Run only these step number(s) (1-6)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -217,7 +233,7 @@ def main() -> int:
 
     for step in steps_to_run:
         print("─" * 66)
-        print(f"  Step {step['num']}/4: {step['name']}")
+        print(f"  Step {step['num']}/{len(STEPS)}: {step['name']}")
         print(f"  Script: {step['script']}")
         print(f"  {step['description']}")
         print("─" * 66)
