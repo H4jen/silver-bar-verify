@@ -55,7 +55,7 @@ METAL_ENTITLEMENT_URL = (
     "https://dataspanapi.wisdomtree.com/pdr/documents/ME/MSL/UK/EN-GB/JE00B1VS3333/"
 )
 
-# Brave browser search paths (same as verify_silver_etcs.py)
+# Brave browser search paths (same as fetch_and_verify_barlists.py)
 BRAVE_DEFAULT = "/usr/bin/brave-browser-stable"
 _BRAVE_CANDIDATES = [
     "/usr/bin/brave-browser-stable",

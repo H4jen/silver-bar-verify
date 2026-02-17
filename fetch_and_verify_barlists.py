@@ -1330,7 +1330,7 @@ def main() -> int:
 
 	report: dict[str, Any] = {
 		"generated_utc": now_iso(),
-		"script": "verify_silver_etcs.py",
+		"script": "fetch_and_verify_barlists.py",
 		"funds_requested": args.funds,
 		"inputs": {
 			"metrics_dir": args.metrics_dir,

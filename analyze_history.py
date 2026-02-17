@@ -240,7 +240,7 @@ def main() -> int:
 	reports = load_reports(data_dir)
 	if not reports:
 		print(f"No verification reports found in {data_dir or 'comex_data/'}")
-		print("Run verify_silver_etcs.py first to generate reports.")
+		print("Run fetch_and_verify_barlists.py first to generate reports.")
 		return 1
 
 	print(f"Found {len(reports)} report(s)")

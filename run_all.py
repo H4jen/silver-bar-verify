@@ -4,7 +4,7 @@ Silver Bar Verify — Daily Runner
 =================================
 
 Wrapper script that runs the full pipeline in order:
-  1) verify_silver_etcs.py   — fetch ETC data, verify bar inventories
+  1) fetch_and_verify_barlists.py — fetch ETC data, verify bar inventories
   2) comex_silver_report2.py — fetch COMEX silver market data
   3) generate_csv.py         — produce ETC time-series CSV
   4) generate_comex_csv.py   — produce COMEX time-series CSV
@@ -17,7 +17,7 @@ Cron example (daily at 22:00):
 
 Usage:
     ./run_all.py              # run full pipeline
-    ./run_all.py --skip 1     # skip step 1 (verify_silver_etcs)
+    ./run_all.py --skip 1     # skip step 1 (fetch_and_verify_barlists)
     ./run_all.py --only 2     # run only step 2 (comex_silver_report2)
     ./run_all.py --dry-run    # check dependencies only, don't run anything
 """
@@ -41,8 +41,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIRED_PACKAGES = [
     ("requests",   "requests",   "comex_silver_report2.py, fetch_invesco.py"),
     ("pandas",     "pandas",     "comex_silver_report2.py"),
-    ("pdfplumber", "pdfplumber", "comex_silver_report2.py, verify_silver_etcs.py"),
-    ("pypdf",      "pypdf",      "verify_silver_etcs.py"),
+    ("pdfplumber", "pdfplumber", "comex_silver_report2.py, fetch_and_verify_barlists.py"),
+    ("pypdf",      "pypdf",      "fetch_and_verify_barlists.py"),
     ("curl_cffi",  "curl_cffi",  "download_documents.py"),
     ("xlrd",       "xlrd",       "comex_silver_report2.py (warehouse stocks XLS)"),
 ]
@@ -72,7 +72,7 @@ STEPS = [
     {
         "num": 3,
         "name": "Silver ETC Verification",
-        "script": "verify_silver_etcs.py",
+        "script": "fetch_and_verify_barlists.py",
         "description": "Fetch ETC data, download bar lists, verify inventories",
     },
     {

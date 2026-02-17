@@ -15,7 +15,7 @@ Behaviour:
   - If a file is unchanged → skips it.
   - Never deletes anything.
 
-Can be run standalone or imported and called from verify_silver_etcs.py.
+Can be run standalone or imported and called from fetch_and_verify_barlists.py.
 """
 
 from __future__ import annotations
@@ -346,7 +346,7 @@ def sync_provider(
 
 
 # ---------------------------------------------------------------------------
-# Public API (called from verify_silver_etcs.py or standalone)
+# Public API (called from fetch_and_verify_barlists.py or standalone)
 # ---------------------------------------------------------------------------
 
 

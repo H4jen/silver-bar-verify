@@ -12,7 +12,7 @@ Usage (standalone):
     python vault_delta.py --funds invesco      # single fund
     python vault_delta.py --reset              # wipe history DBs and start fresh
 
-Imported by verify_silver_etcs.py for integrated reporting.
+Imported by fetch_and_verify_barlists.py for integrated reporting.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _ensure_imports() -> None:
     """Lazy-import BarRecord and DEFAULT_FUNDS from the main script."""
     global _BarRecord, _DEFAULT_FUNDS
     if _BarRecord is None:
-        from verify_silver_etcs import BarRecord, DEFAULT_FUNDS
+        from fetch_and_verify_barlists import BarRecord, DEFAULT_FUNDS
         _BarRecord = BarRecord
         _DEFAULT_FUNDS = DEFAULT_FUNDS
 
@@ -545,13 +545,13 @@ def main() -> int:
     latest_json = os.path.join(CACHE_DIR, "etc_silver_inventory_verification_latest.json")
     if not os.path.exists(latest_json):
         print(f"  ERROR: {latest_json} not found.")
-        print("  Run verify_silver_etcs.py first to generate bar list data.")
+        print("  Run fetch_and_verify_barlists.py first to generate bar list data.")
         return 1
 
     with open(latest_json, "r", encoding="utf-8") as fh:
         report = json.load(fh)
 
-    from verify_silver_etcs import _normalise_date_tag
+    from fetch_and_verify_barlists import _normalise_date_tag
 
     delta_results: dict[str, dict[str, Any]] = {}
     for fund in args.funds:
