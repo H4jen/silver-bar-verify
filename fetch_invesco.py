@@ -112,6 +112,24 @@ def fetch_invesco_metrics() -> dict[str, Any]:
 #  Metrics file update
 # ---------------------------------------------------------------------------
 
+def _data_fingerprint(path: str) -> str:
+    """Return a hash of the *meaningful* fields in a metrics JSON file.
+
+    Ignores ``scraped_utc`` and ``source_note`` so that re-scrapes of the
+    same fund data on the same date don't produce numbered duplicates.
+    """
+    _TRANSIENT = {"scraped_utc", "source_note"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        stable = {k: v for k, v in data.items() if k not in _TRANSIENT}
+        blob = json.dumps(stable, sort_keys=True).encode()
+    except Exception:
+        with open(path, "rb") as f:
+            blob = f.read()
+    return hashlib.sha256(blob).hexdigest()
+
+
 def _archive_metrics(metrics_path: str, data_date: str) -> str | None:
     """Archive the current metrics file tagged by *data_date* (YYYY-MM-DD).
 
@@ -120,26 +138,24 @@ def _archive_metrics(metrics_path: str, data_date: str) -> str | None:
     if not os.path.exists(metrics_path):
         return None
 
-    with open(metrics_path, "rb") as f:
-        old_data = f.read()
-
-    old_hash = hashlib.sha256(old_data).hexdigest()
+    old_fp = _data_fingerprint(metrics_path)
     tag = data_date.replace("-", "")
 
     name, ext = os.path.splitext(metrics_path)
     archive_path = f"{name}_{tag}{ext}"
 
-    # Don't create duplicate archives
+    # Don't create duplicate archives (compare data fields only)
     if os.path.exists(archive_path):
-        with open(archive_path, "rb") as f:
-            if hashlib.sha256(f.read()).hexdigest() == old_hash:
-                return archive_path
-        # Same date, different content — add counter
+        if _data_fingerprint(archive_path) == old_fp:
+            return archive_path
+        # Same date, genuinely different data — add counter
         counter = 1
         while os.path.exists(archive_path):
             archive_path = f"{name}_{tag}_{counter}{ext}"
             counter += 1
 
+    with open(metrics_path, "rb") as f:
+        old_data = f.read()
     with open(archive_path, "wb") as f:
         f.write(old_data)
     print(f"  [archive] Saved previous metrics → {os.path.basename(archive_path)}", file=sys.stderr)
