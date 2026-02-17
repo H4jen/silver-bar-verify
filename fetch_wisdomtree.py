@@ -83,21 +83,31 @@ def _clean_number(raw: str) -> float | None:
         return None
 
 
-def _normalise_as_of_date(raw: str) -> str:
-    """Turn a date like '13 Feb 2026' or '2026-02-13' into ISO 'YYYY-MM-DD'."""
+def _normalise_as_of_date(raw: str) -> str | None:
+    """Turn a date like '13 Feb 2026' or '2026-02-13' into ISO 'YYYY-MM-DD'.
+
+    Returns *None* when the raw string parses to an obviously bogus date
+    (year < 2020).  This catches anti-bot / partial-render artefacts like
+    ``"01 Jan 001"``.
+    """
     if not raw:
-        return datetime.now().strftime("%Y-%m-%d")
+        return None
+    parsed: datetime | None = None
     # Already ISO
     m = re.match(r"(\d{4}-\d{2}-\d{2})", raw.strip())
     if m:
-        return m.group(1)
-    # WisdomTree style: "13 Feb 2026" or "13 February 2026"
-    for fmt in ("%d %b %Y", "%d %B %Y"):
-        try:
-            return datetime.strptime(raw.strip(), fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-    return datetime.now().strftime("%Y-%m-%d")
+        parsed = datetime.strptime(m.group(1), "%Y-%m-%d")
+    else:
+        # WisdomTree style: "13 Feb 2026" or "13 February 2026"
+        for fmt in ("%d %b %Y", "%d %B %Y"):
+            try:
+                parsed = datetime.strptime(raw.strip(), fmt)
+                break
+            except ValueError:
+                pass
+    if parsed is None or parsed.year < 2020:
+        return None
+    return parsed.strftime("%Y-%m-%d")
 
 
 def _find_brave() -> str:
@@ -516,8 +526,7 @@ def update_metrics_file(scraped: dict[str, Any], metrics_path: str = METRICS_FIL
         if old_date:
             _archive_metrics(metrics_path, old_date)
 
-    data: dict[str, Any] = {}
-    for key in (
+    EXPECTED_KEYS = (
         "certificates_outstanding",
         "entitlement_oz_per_certificate",
         "total_assets_usd",
@@ -528,13 +537,34 @@ def update_metrics_file(scraped: dict[str, Any], metrics_path: str = METRICS_FIL
         "mer_pct",
         "daily_change_usd",
         "daily_return_pct",
-    ):
+    )
+    MIN_METRICS = 5  # out of 10 expected
+
+    data: dict[str, Any] = {}
+    for key in EXPECTED_KEYS:
         if key in new_metrics:
             data[key] = new_metrics[key]
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    if len(data) < MIN_METRICS:
+        print(
+            f"Only {len(data)}/{len(EXPECTED_KEYS)} metrics extracted "
+            f"(minimum {MIN_METRICS}) — likely an anti-bot page. "
+            f"Refusing to overwrite {metrics_path}.",
+            file=sys.stderr,
+        )
+        return False
+
     raw_as_of = new_metrics.get("as_of_date", "")
-    data_date = _normalise_as_of_date(raw_as_of) if raw_as_of else today
+    data_date = _normalise_as_of_date(raw_as_of)
+    if data_date is None:
+        print(
+            f"Invalid or missing as_of_date '{raw_as_of}' — likely an "
+            f"anti-bot page. Refusing to overwrite {metrics_path}.",
+            file=sys.stderr,
+        )
+        return False
+
+    today = datetime.now().strftime("%Y-%m-%d")
     data["as_of"] = data_date
     data["scraped_utc"] = datetime.now(timezone.utc).isoformat()
     data["source_note"] = (
