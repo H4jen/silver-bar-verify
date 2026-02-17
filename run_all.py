@@ -93,6 +93,18 @@ STEPS = [
         "script": "generate_comex_csv.py",
         "description": "Generate comex_silver_timeseries.csv from COMEX data",
     },
+    {
+        "num": 7,
+        "name": "SHFE Silver Report",
+        "script": "fetch_shfe_silver.py",
+        "description": "Fetch SHFE silver warehouse inventory and futures data",
+    },
+    {
+        "num": 8,
+        "name": "SHFE Time-Series CSV",
+        "script": "generate_shfe_csv.py",
+        "description": "Generate shfe_silver_timeseries.csv from SHFE data",
+    },
 ]
 
 
@@ -175,11 +187,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--skip", type=int, nargs="+", metavar="N",
-        help="Step number(s) to skip (1-6)",
+        help="Step number(s) to skip (1-8)",
     )
     parser.add_argument(
         "--only", type=int, nargs="+", metavar="N",
-        help="Run only these step number(s) (1-6)",
+        help="Run only these step number(s) (1-8)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
