@@ -8,6 +8,7 @@ Wrapper script that runs the full pipeline in order:
   2) comex_silver_report2.py — fetch COMEX silver market data
   3) generate_csv.py         — produce ETC time-series CSV
   4) generate_comex_csv.py   — produce COMEX time-series CSV
+  9) generate_plots.py       — produce all plots from time-series CSVs
 
 Designed to be run via cron.  Checks Python dependencies on startup
 and exits with a clear message if any are missing.
@@ -39,6 +40,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------------------
 #  (module_name, pip_name, required_by)
 REQUIRED_PACKAGES = [
+    ("matplotlib", "matplotlib", "generate_plots.py"),
     ("requests",   "requests",   "comex_silver_report2.py, fetch_invesco.py"),
     ("pandas",     "pandas",     "comex_silver_report2.py"),
     ("pdfplumber", "pdfplumber", "comex_silver_report2.py, fetch_and_verify_barlists.py"),
@@ -104,6 +106,12 @@ STEPS = [
         "name": "SHFE Time-Series CSV",
         "script": "generate_shfe_csv.py",
         "description": "Generate shfe_silver_timeseries.csv from SHFE data",
+    },
+    {
+        "num": 9,
+        "name": "Generate Plots",
+        "script": "generate_plots.py",
+        "description": "Produce all plots (1–8) from time-series CSVs into comex_data/plots/",
     },
 ]
 
