@@ -1009,6 +1009,65 @@ def plot_shfe_oi_warehouse(shfe: pd.DataFrame) -> str:
     return out
 
 
+# ── Plot 9: Total OI Trend ────────────────────────────────────────────
+def plot_total_oi_trend(comex: pd.DataFrame, shfe: pd.DataFrame) -> str:
+    """
+    Full-year time series of total open interest for COMEX and SHFE.
+    Left Y-axis  : COMEX OI in million troy oz (400 – 1000)
+    Right Y-axis : SHFE OI in million troy oz  (0 – 600)
+    X-axis : Jan 1 → Dec 31 of the current year
+    """
+    year    = date.today().year
+    x_start = datetime(year, 1, 1)
+    x_end   = datetime(year, 12, 31)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax2 = ax.twinx()
+
+    if comex is not None and not comex.empty:
+        comex_moz = comex["all_oi_contracts"] * 5_000 / 1e6
+        ax.plot(comex["date"], comex_moz,
+                color=COMEX_COLOR_REG, linewidth=2.5,
+                marker="o", markersize=6, label="COMEX OI", zorder=4)
+
+    if shfe is not None and not shfe.empty:
+        shfe_moz = shfe["total_oi_contracts"] * SHFE_AG_CONTRACT_OZ / 1e6
+        ax2.plot(shfe["date"], shfe_moz,
+                 color=SHFE_COLOR_REG, linewidth=2.5,
+                 marker="s", markersize=6, label="SHFE OI", zorder=3)
+
+    ax.set_xlim(x_start, x_end)
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    ax.set_ylim(400, 1000)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}M"))
+    ax.set_ylabel("COMEX OI  (Million Troy Oz)", color=COMEX_COLOR_REG)
+    ax.tick_params(axis="y", labelcolor=COMEX_COLOR_REG)
+    ax.set_xlabel(str(year))
+
+    ax2.set_ylim(0, 600)
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}M"))
+    ax2.set_ylabel("SHFE OI  (Million Troy Oz)", color=SHFE_COLOR_REG)
+    ax2.tick_params(axis="y", labelcolor=SHFE_COLOR_REG)
+
+    # Merged legend
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right", framealpha=0.9, fontsize=9)
+    ax.set_title(
+        f"COMEX & SHFE – Total Open Interest Trend  ({year})  (Plot 9)",
+        fontsize=14, fontweight="bold", pad=12,
+    )
+
+    fig.autofmt_xdate(rotation=0, ha="center")
+    fig.tight_layout()
+    out = os.path.join(PLOT_DIR, "09_total_oi_trend.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 # ── main ───────────────────────────────────────────────────────────
 def main():
     os.makedirs(PLOT_DIR, exist_ok=True)
@@ -1060,6 +1119,10 @@ def main():
 
     print("\n── Plot 0b: SHFE OI & Warehouse (current month) ──")
     out = plot_shfe_oi_warehouse(shfe)
+    print(f"  ✓  saved → {out}")
+
+    print("\n── Plot 9: Total OI Trend ──")
+    out = plot_total_oi_trend(comex, shfe)
     print(f"  ✓  saved → {out}")
 
     print("\nDone.")
