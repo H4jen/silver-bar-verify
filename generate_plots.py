@@ -806,6 +806,209 @@ def plot_registered_to_oi(comex: pd.DataFrame, shfe: pd.DataFrame) -> str:
     return out
 
 
+# ── Plot 9: Deliveries, OI & Warehouse – Current Month ──────────────
+def _lookup_oi_by_month(df: pd.DataFrame, mon_abbr: str, yr2: str) -> pd.Series:
+    """Return a Series of OI (oz) for the contract matching mon_abbr + yr2 (e.g. 'MAR', '26').
+    Scans oi_month_1..6 label columns per row and sums matching contracts × 5000."""
+    target = f"{mon_abbr.upper()} {yr2}"
+    n_ranks = 6
+    label_cols    = [f"oi_month_{i}_label"     for i in range(1, n_ranks + 1)]
+    contract_cols = [f"oi_month_{i}_contracts" for i in range(1, n_ranks + 1)]
+    result = pd.Series(0.0, index=df.index)
+    for lc, cc in zip(label_cols, contract_cols):
+        if lc in df.columns and cc in df.columns:
+            matched = df[lc].str.upper().str.strip() == target
+            result += matched * pd.to_numeric(df[cc], errors="coerce").fillna(0) * 5000
+    return result
+
+
+def plot_deliveries_oi_warehouse(comex: pd.DataFrame) -> str:
+    """
+    Combined intra-month view for COMEX (current calendar month):
+      • Registered silver in warehouse  (blue)
+      • YTD cumulative deliveries        (green)
+      • OI for next calendar month       (orange, dashed)
+      • OI for month after that          (red, dashed)
+    X-axis : day 1 → last day of current month
+    Y-axis : million troy ounces
+    """
+    import calendar
+    today   = date.today()
+    year    = today.year
+    month   = today.month
+    last_day = calendar.monthrange(year, month)[1]
+    x_start = datetime(year, month, 1)
+    x_end   = datetime(year, month, last_day)
+
+    # Coming two months (next month, month after)
+    m1_date = (datetime(year, month, 1) + timedelta(days=32)).replace(day=1)
+    m2_date = (m1_date + timedelta(days=32)).replace(day=1)
+    m1_abbr, m1_yr2 = m1_date.strftime("%b").upper(), m1_date.strftime("%y")
+    m2_abbr, m2_yr2 = m2_date.strftime("%b").upper(), m2_date.strftime("%y")
+    lbl1 = f"{m1_abbr} {m1_yr2}"
+    lbl2 = f"{m2_abbr} {m2_yr2}"
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    lines2, labels2 = [], []  # right-axis legend entries (populated below)
+
+    if comex is not None and not comex.empty:
+        # Restrict to current month
+        mask = (comex["date"].dt.year == year) & (comex["date"].dt.month == month)
+        df = comex[mask].copy()
+
+        if not df.empty:
+            dates = df["date"]
+
+            # Warehouse registered (left axis)
+            reg_moz = df["warehouse_registered_oz"] / 1e6
+            ax.plot(dates, reg_moz, color=COMEX_COLOR_REG, linewidth=2.5,
+                    marker="o", markersize=6, label="Registered", zorder=4)
+
+            # Warehouse eligible (left axis)
+            elig_moz = df["warehouse_eligible_oz"] / 1e6
+            ax.plot(dates, elig_moz, color=COMEX_COLOR_ELIG, linewidth=2.5,
+                    marker="D", markersize=5, label="Eligible", zorder=4)
+
+            # OI summed for the coming two months (left axis)
+            oi_combined_moz = (
+                _lookup_oi_by_month(df, m1_abbr, m1_yr2) +
+                _lookup_oi_by_month(df, m2_abbr, m2_yr2)
+            ) / 1e6
+            ax.plot(dates, oi_combined_moz, color="#ff7f0e", linewidth=2,
+                    linestyle="--", marker="^", markersize=5,
+                    label=f"OI {lbl1} + {lbl2}", zorder=3)
+
+            # Cumulative deliveries (right axis)
+            ax2 = ax.twinx()
+            del_moz = df["current_month_delivered_oz"] / 1e6
+            ax2.plot(dates, del_moz, color=COMEX_COLOR_COMB, linewidth=2.5,
+                     marker="s", markersize=6, label="Delivered (MTD)", zorder=4)
+            ax2.set_ylim(0, 80)
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}M"))
+            ax2.set_ylabel("Delivered MTD  (Million Troy Oz)", color=COMEX_COLOR_COMB)
+            ax2.tick_params(axis="y", labelcolor=COMEX_COLOR_COMB)
+            # Merge legends from both axes
+            lines2, labels2 = ax2.get_legend_handles_labels()
+
+    ax.set_xlim(x_start, x_end)
+    ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    ax.xaxis.set_minor_locator(mdates.DayLocator())
+    ax.set_ylim(0, 400)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}M"))
+    ax.set_ylabel("Million Troy Oz")
+    month_name = datetime(year, month, 1).strftime("%B %Y")
+    ax.set_xlabel(month_name)
+    lines1, labels1 = ax.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", framealpha=0.9, fontsize=9)
+    ax.set_title(
+        f"COMEX – Deliveries, OI & Warehouse Inventory  ({month_name})  (Plot 0)",
+        fontsize=14, fontweight="bold", pad=12,
+    )
+
+    fig.autofmt_xdate(rotation=30, ha="right")
+    fig.tight_layout()
+    out = os.path.join(PLOT_DIR, "00a_comex_oi_warehouse.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
+# ── Plot 0b: SHFE OI & Warehouse – Current Month ────────────────────
+SHFE_AG_CONTRACT_OZ = 15 * 32.15074657   # 15 kg per contract → ~482.26 troy oz
+
+
+def _lookup_shfe_oi_by_month(df: pd.DataFrame, mon_abbr: str, yr2: str) -> pd.Series:
+    """Return a Series of OI (oz) for the SHFE contract matching mon_abbr + yr2.
+    Scans oi_rank_1..6_month columns and multiplies matching contracts × 482.26 oz."""
+    target = f"{mon_abbr.upper()} {yr2}"
+    n_ranks = 6
+    month_cols    = [f"oi_rank_{i}_month"     for i in range(1, n_ranks + 1)]
+    contract_cols = [f"oi_rank_{i}_contracts" for i in range(1, n_ranks + 1)]
+    result = pd.Series(0.0, index=df.index)
+    for mc, cc in zip(month_cols, contract_cols):
+        if mc in df.columns and cc in df.columns:
+            matched = df[mc].str.upper().str.strip() == target
+            result += matched * pd.to_numeric(df[cc], errors="coerce").fillna(0) * SHFE_AG_CONTRACT_OZ
+    return result
+
+
+def plot_shfe_oi_warehouse(shfe: pd.DataFrame) -> str:
+    """
+    Combined intra-month view for SHFE (current calendar month):
+      • Registered silver in warehouse  (red)
+      • Eligible silver in warehouse    (light red)
+      • OI summed for coming two months (orange, dashed)
+    X-axis : day 1 → last day of current month
+    Y-axis : million troy ounces
+    """
+    import calendar
+    today    = date.today()
+    year     = today.year
+    month    = today.month
+    last_day = calendar.monthrange(year, month)[1]
+    x_start  = datetime(year, month, 1)
+    x_end    = datetime(year, month, last_day)
+
+    # Coming two months
+    m1_date = (datetime(year, month, 1) + timedelta(days=32)).replace(day=1)
+    m2_date = (m1_date + timedelta(days=32)).replace(day=1)
+    m1_abbr, m1_yr2 = m1_date.strftime("%b").upper(), m1_date.strftime("%y")
+    m2_abbr, m2_yr2 = m2_date.strftime("%b").upper(), m2_date.strftime("%y")
+    lbl1 = f"{m1_abbr} {m1_yr2}"
+    lbl2 = f"{m2_abbr} {m2_yr2}"
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    if shfe is not None and not shfe.empty:
+        mask = (shfe["date"].dt.year == year) & (shfe["date"].dt.month == month)
+        df = shfe[mask].copy()
+
+        if not df.empty:
+            dates = df["date"]
+
+            # Warehouse registered
+            reg_moz = df["warehouse_registered_oz"] / 1e6
+            ax.plot(dates, reg_moz, color=SHFE_COLOR_REG, linewidth=2.5,
+                    marker="o", markersize=6, label="Registered", zorder=4)
+
+            # Warehouse eligible
+            elig_moz = df["warehouse_eligible_oz"] / 1e6
+            ax.plot(dates, elig_moz, color=SHFE_COLOR_ELIG, linewidth=2.5,
+                    marker="D", markersize=5, label="Eligible", zorder=4)
+
+            # OI summed for coming two months
+            oi_combined_moz = (
+                _lookup_shfe_oi_by_month(df, m1_abbr, m1_yr2) +
+                _lookup_shfe_oi_by_month(df, m2_abbr, m2_yr2)
+            ) / 1e6
+            ax.plot(dates, oi_combined_moz, color="#ff7f0e", linewidth=2,
+                    linestyle="--", marker="^", markersize=5,
+                    label=f"OI {lbl1} + {lbl2}", zorder=3)
+
+    ax.set_xlim(x_start, x_end)
+    ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    ax.xaxis.set_minor_locator(mdates.DayLocator())
+    ax.set_ylim(0, 200)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}M"))
+    ax.set_ylabel("Million Troy Oz")
+    month_name = datetime(year, month, 1).strftime("%B %Y")
+    ax.set_xlabel(month_name)
+    ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
+    ax.set_title(
+        f"SHFE – OI & Warehouse Inventory  ({month_name})  (Plot 0b)",
+        fontsize=14, fontweight="bold", pad=12,
+    )
+
+    fig.autofmt_xdate(rotation=30, ha="right")
+    fig.tight_layout()
+    out = os.path.join(PLOT_DIR, "00b_shfe_oi_warehouse.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 # ── main ───────────────────────────────────────────────────────────
 def main():
     os.makedirs(PLOT_DIR, exist_ok=True)
@@ -850,6 +1053,14 @@ def main():
     print("\n── Plot 8: Registered Silver / OI ──")
     saved = plot_registered_to_oi(comex, shfe)
     print(f"  ✓  saved → {saved}")
+
+    print("\n── Plot 0: Deliveries, OI & Warehouse (current month) ──")
+    out = plot_deliveries_oi_warehouse(comex)
+    print(f"  ✓  saved → {out}")
+
+    print("\n── Plot 0b: SHFE OI & Warehouse (current month) ──")
+    out = plot_shfe_oi_warehouse(shfe)
+    print(f"  ✓  saved → {out}")
 
     print("\nDone.")
 
