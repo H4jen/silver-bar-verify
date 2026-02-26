@@ -28,6 +28,8 @@ PLOT_DIR   = os.path.join(DATA_DIR, "plots")
 COMEX_CSV  = os.path.join(DATA_DIR, "comex_silver_timeseries.csv")
 SHFE_CSV   = os.path.join(DATA_DIR, "shfe_silver_timeseries.csv")
 ETC_CSV    = os.path.join(DATA_DIR, "silver_etcs_timeseries.csv")
+GSR_CSV           = os.path.join(DATA_DIR, "gsr_premiums_timeseries.csv")
+DEALER_PRICES_CSV = os.path.join(DATA_DIR, "dealer_prices_timeseries.csv")
 
 # ── styling ────────────────────────────────────────────────────────
 plt.rcParams.update({
@@ -1068,6 +1070,282 @@ def plot_total_oi_trend(comex: pd.DataFrame, shfe: pd.DataFrame) -> str:
     return out
 
 
+# ── Plot 10: Gold/Silver Ratio ───────────────────────────────────
+
+def plot_gsr(gsr: pd.DataFrame | None) -> str | None:
+    """
+    Gold/Silver Ratio over time.
+    Draws horizontal signal bands and annotates the latest value.
+    """
+    if gsr is None or gsr.empty or "gsr" not in gsr.columns:
+        print("  ⚠  No GSR data to plot")
+        return None
+
+    df = gsr.dropna(subset=["gsr"]).copy()
+    if df.empty:
+        print("  ⚠  GSR column is all-NaN")
+        return None
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # ── signal bands ──────────────────────────────────────────────
+    # colour the background to indicate signal zones
+    band_alpha = 0.10
+    ax.axhspan(0,   40,  color="#d62728", alpha=band_alpha, label="Extremt lågt  (≤40)")
+    ax.axhspan(40,  50,  color="#ff7f0e", alpha=band_alpha, label="Rotationssignal (40–50)")
+    ax.axhspan(50,  75,  color="#2ca02c", alpha=band_alpha, label="Neutralt (50–75)")
+    ax.axhspan(75,  90,  color="#1f77b4", alpha=band_alpha, label="Silver billigt (75–90)")
+    ax.axhspan(90, 150,  color="#9467bd", alpha=band_alpha, label="Historiskt högt (>90)")
+
+    # horizontal guide lines
+    for level, color in ((40, "#d62728"), (50, "#ff7f0e"), (75, "#2ca02c"), (90, "#9467bd")):
+        ax.axhline(level, color=color, linewidth=0.8, linestyle="--", alpha=0.6)
+        ax.annotate(str(level), xy=(df["date"].iloc[0], level),
+                    xytext=(4, 3), textcoords="offset points",
+                    fontsize=8, color=color, alpha=0.8)
+
+    # GSR line
+    ax.plot(df["date"], df["gsr"],
+            color="#333333", linewidth=2.2,
+            marker="o", markersize=4, zorder=5, label="GSR")
+
+    # annotate latest value
+    last_val = df["gsr"].iloc[-1]
+    last_dt  = df["date"].iloc[-1]
+    ax.annotate(f"GSR {last_val:.1f}",
+                xy=(last_dt, last_val),
+                textcoords="offset points", xytext=(8, 0),
+                fontsize=10, color="#333333", fontweight="bold")
+
+    # ── axes ──────────────────────────────────────────────────────
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    fig.autofmt_xdate(rotation=30, ha="right")
+
+    y_min = max(0, df["gsr"].min() - 5)
+    y_max = df["gsr"].max() + 5
+    ax.set_ylim(y_min, y_max)
+    ax.set_ylabel("Guld / Silver (oz/oz)")
+    ax.set_xlabel("Datum")
+    ax.set_title("Gold/Silver Ratio (GSR) – Historisk tidsserie  (Plot 10)",
+                 fontsize=14, fontweight="bold", pad=12)
+    ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
+
+    fig.tight_layout()
+    out = os.path.join(PLOT_DIR, "10_gsr.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
+# ── Plot 11: Global Silver Premiums ──────────────────────────────
+
+# (column, label, color, linestyle, linewidth, zorder)
+_DEALER_SERIES = [
+    ("lbma_spot_usd_oz",   "COMEX/LBMA Spot",           "#000000", "--", 2.5, 10),
+    ("avg_physical_usd_oz","⌀ Avg Physical Price",       "#ff4500", "-",  3.0,  9),
+    ("shfe_usd_oz",        "SHFE (CN)",                  "#8B0000", "-",  1.8,  5),
+    ("royal_mint_usd_oz",  "Royal Mint (UK)",            "#1a6eb5", "-",  1.8,  5),
+    ("bgasc_usd_oz",       "BGASC (USA)",                "#2ca02c", "-",  1.8,  5),
+    ("abc_bullion_usd_oz", "ABC Bullion (AU)",           "#e8a020", "-",  1.8,  5),
+    ("proaurum_usd_oz",    "proaurum (EU, ex-VAT)",      "#9467bd", "-",  1.8,  5),
+]
+
+
+def plot_global_premiums(gsr: pd.DataFrame | None) -> str | None:
+    """
+    Time-series chart: actual physical dealer prices (USD/oz) per region
+    from dealer_prices_timeseries.csv, plus LBMA spot as reference.
+    Falls back to GSR CSV estimated series if dealer CSV is absent.
+    """
+    # Load live dealer prices CSV
+    dealer_df: pd.DataFrame | None = None
+    if os.path.exists(DEALER_PRICES_CSV):
+        try:
+            dealer_df = pd.read_csv(DEALER_PRICES_CSV, parse_dates=["date"])
+            dealer_df = dealer_df.sort_values("date").reset_index(drop=True)
+        except Exception as e:
+            print(f"  ⚠  Could not load dealer prices CSV: {e}")
+
+    if dealer_df is not None and not dealer_df.empty:
+        df = dealer_df
+        available = [
+            (col, lbl, clr, ls, lw, zo)
+            for col, lbl, clr, ls, lw, zo in _DEALER_SERIES
+            if col in df.columns and df[col].notna().any()
+        ]
+        title_sub = "Live handlarpriser per region (ex-skatt) + genomsnitt — proaurum, BGASC, Royal Mint, ABC Bullion, SHFE"
+    elif gsr is not None and not gsr.empty:
+        # Fallback to GSR estimated data
+        df = gsr.copy()
+        available = [
+            (col, lbl, clr, ls, lw, zo)
+            for col, lbl, clr, ls, lw, zo in [
+                ("silver_spot_usd_oz", "COMEX/LBMA Spot",        "#000000", "--", 2.5, 10),
+                ("avg_physical_usd_oz","⌀ Avg Physical Price",   "#ff4500", "-",  3.0,  9),
+                ("phys_buy_usd_oz",   "+8% estimerad premium",   "#1f77b4", "--", 1.4,  5),
+                ("shfe_front_usd_oz", "SHFE (CN)",               "#8B0000", "-",  1.8,  5),
+            ]
+            if col in df.columns and df[col].notna().any()
+        ]
+        title_sub = "Estimerat köppris (spot +8%) — live handlardata saknas"
+    else:
+        print("  ⚠  No premium data available for Plot 11")
+        return None
+
+    if not available:
+        print("  ⚠  No plottable columns found for Plot 11")
+        return None
+
+    fig, ax = plt.subplots(figsize=(16, 7))
+
+    for col, label, color, ls, lw, zorder in available:
+        s = df.dropna(subset=[col])
+        ax.plot(s["date"], s[col],
+                color=color, linewidth=lw, linestyle=ls,
+                marker="o" if lw < 2.5 else None, markersize=5,
+                alpha=0.9, zorder=zorder, label=label)
+        _annotate_last(ax, s["date"], s[col],
+                       f"{label}  ${s[col].iloc[-1]:.2f}",
+                       color, xoffset=6)
+
+    # ── axes ──────────────────────────────────────────────────────
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    fig.autofmt_xdate(rotation=30, ha="right")
+
+    ax.set_ylabel("USD per troy oz")
+    ax.set_xlabel("Datum")
+    ax.set_title(
+        f"Globala Silverpremier USD/oz — Plot 11\n{title_sub}",
+        fontsize=13, fontweight="bold", pad=10,
+    )
+    ax.set_ylim(bottom=max(0, ax.get_ylim()[0] * 0.97))
+
+    ncol = 2 if len(available) > 4 else 1
+    ax.legend(loc="lower right", framealpha=0.9, fontsize=9,
+              ncol=ncol, columnspacing=1.0)
+
+    fig.tight_layout()
+    out = os.path.join(PLOT_DIR, "11_global_premiums.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
+def _annotate_last(ax, dates, values, label: str, color: str,
+                   xoffset: int = 6, fontsize: int = 8) -> None:
+    """Annotate the last data point of a series."""
+    try:
+        last_val = values.iloc[-1]
+        last_dt  = dates.iloc[-1]
+        ax.annotate(label,
+                    xy=(last_dt, last_val),
+                    textcoords="offset points", xytext=(xoffset, 0),
+                    fontsize=fontsize, color=color,
+                    va="center", fontweight="bold")
+    except Exception:
+        pass
+
+
+# ── Plot 12: Premium % vs COMEX Spot ────────────────────────────────
+
+def plot_premium_pct(dealer_df: pd.DataFrame | None) -> str | None:
+    """
+    Line chart: percentage premium of SHFE and Avg Physical price
+    over the COMEX/LBMA spot price, plus individual dealer premiums.
+    Zero line = COMEX spot.  Positive = more expensive than spot.
+    """
+    if dealer_df is None or dealer_df.empty:
+        print("  ⚠  No dealer price data for Plot 12")
+        return None
+
+    df = dealer_df.copy()
+    if "lbma_spot_usd_oz" not in df.columns or df["lbma_spot_usd_oz"].isna().all():
+        print("  ⚠  No LBMA spot column in dealer CSV")
+        return None
+
+    # Compute % premium for each series
+    spot = df["lbma_spot_usd_oz"]
+
+    # (source_col, label, color, linewidth, linestyle, zorder)
+    SERIES = [
+        ("avg_physical_usd_oz", "⌀ Avg Physical",      "#ff4500", 3.0, "-",  10),
+        ("shfe_usd_oz",         "SHFE (CN)",            "#8B0000", 2.0, "-",  7),
+        ("royal_mint_usd_oz",   "Royal Mint (UK)",      "#1a6eb5", 1.5, "--", 5),
+        ("bgasc_usd_oz",        "BGASC (USA)",          "#2ca02c", 1.5, "--", 5),
+        ("abc_bullion_usd_oz",  "ABC Bullion (AU)",     "#e8a020", 1.5, "--", 5),
+        ("proaurum_usd_oz",     "proaurum (EU, ex-VAT)","#9467bd", 1.5, "--", 5),
+    ]
+
+    fig, ax = plt.subplots(figsize=(16, 7))
+
+    # Zero line = COMEX spot
+    ax.axhline(0, color="#000000", linewidth=2.0, linestyle="-", zorder=11,
+               label="COMEX/LBMA Spot (0%)")
+
+    plotted = []
+    for col, label, color, lw, ls, zo in SERIES:
+        if col not in df.columns:
+            continue
+        s = df[["date", col]].dropna()
+        s = s[spot.reindex(s.index).notna()]
+        if s.empty:
+            continue
+        pct = (s[col] - spot.reindex(s.index)) / spot.reindex(s.index) * 100
+        ax.plot(s["date"], pct,
+                color=color, linewidth=lw, linestyle=ls,
+                marker="o", markersize=5 if lw >= 2 else 4,
+                alpha=0.9, zorder=zo, label=label)
+        last_pct = pct.iloc[-1]
+        _annotate_last(ax, s["date"], pct,
+                       f"{label}  {last_pct:+.1f}%",
+                       color, xoffset=6)
+        plotted.append(label)
+
+    if not plotted:
+        print("  ⚠  No plottable series for Plot 12")
+        plt.close(fig)
+        return None
+
+    # Shade area between avg physical and spot
+    avg_col = "avg_physical_usd_oz"
+    if avg_col in df.columns:
+        s = df[["date", avg_col]].dropna()
+        s = s[spot.reindex(s.index).notna()]
+        if not s.empty:
+            pct = (s[avg_col] - spot.reindex(s.index)) / spot.reindex(s.index) * 100
+            ax.fill_between(s["date"], 0, pct,
+                            alpha=0.08, color="#ff4500", zorder=1)
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+    fig.autofmt_xdate(rotation=30, ha="right")
+
+    ax.set_ylabel("Premium vs COMEX spot (%)")
+    ax.set_xlabel("Datum")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:+.1f}%"))
+    ax.axhline(0, color="black", linewidth=0.5, linestyle="-")   # reinforce zero
+
+    ax.set_title(
+        "Silverpremie över COMEX Spot — Plot 12\n"
+        "% skillnad: SHFE, genomsnitt fysiskt & per handlare vs LBMA/COMEX spot",
+        fontsize=13, fontweight="bold", pad=10,
+    )
+
+    ncol = 2 if len(plotted) > 4 else 1
+    ax.legend(loc="lower right", framealpha=0.9, fontsize=9, ncol=ncol)
+    fig.tight_layout()
+
+    out = os.path.join(PLOT_DIR, "12_premium_pct.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 # ── main ───────────────────────────────────────────────────────────
 def main():
     os.makedirs(PLOT_DIR, exist_ok=True)
@@ -1124,6 +1402,25 @@ def main():
     print("\n── Plot 9: Total OI Trend ──")
     out = plot_total_oi_trend(comex, shfe)
     print(f"  ✓  saved → {out}")
+
+    gsr = load_csv(GSR_CSV)
+
+    print("\n── Plot 10: Gold/Silver Ratio (GSR) ──")
+    out = plot_gsr(gsr)
+    if out:
+        print(f"  ✓  saved → {out}")
+
+    print("\n── Plot 11: Global Silver Premiums (live dealer prices) ──")
+    out = plot_global_premiums(gsr)
+    if out:
+        print(f"  ✓  saved → {out}")
+
+    dealer_df = load_csv(DEALER_PRICES_CSV)
+
+    print("\n── Plot 12: Premium % vs COMEX Spot ──")
+    out = plot_premium_pct(dealer_df)
+    if out:
+        print(f"  ✓  saved → {out}")
 
     print("\nDone.")
 

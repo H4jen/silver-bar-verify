@@ -4,11 +4,17 @@ Silver Bar Verify — Daily Runner
 =================================
 
 Wrapper script that runs the full pipeline in order:
-  1) fetch_and_verify_barlists.py — fetch ETC data, verify bar inventories
-  2) comex_silver_report2.py — fetch COMEX silver market data
-  3) generate_csv.py         — produce ETC time-series CSV
-  4) generate_comex_csv.py   — produce COMEX time-series CSV
-  9) generate_plots.py       — produce all plots from time-series CSVs
+  1) fetch_invesco.py         — scrape Invesco ETF fund metrics
+  2) fetch_wisdomtree.py      — scrape WisdomTree ETF fund metrics
+  3) fetch_and_verify_barlists.py — fetch ETC data, verify bar inventories
+  4) comex_silver_report2.py  — fetch COMEX silver market data
+  5) generate_csv.py          — produce ETC time-series CSV
+  6) generate_comex_csv.py    — produce COMEX time-series CSV
+  7) fetch_shfe_silver.py     — fetch SHFE silver warehouse & futures data
+  8) generate_shfe_csv.py     — produce SHFE time-series CSV
+  9) fetch_gsr_premiums.py    — fetch Gold/Silver Ratio and regional premiums
+ 10) fetch_dealer_prices.py   — scrape live dealer prices per region (Playwright)
+ 11) generate_plots.py        — produce all plots (1–12) from time-series CSVs
 
 Designed to be run via cron.  Checks Python dependencies on startup
 and exits with a clear message if any are missing.
@@ -50,7 +56,8 @@ REQUIRED_PACKAGES = [
 ]
 
 OPTIONAL_PACKAGES = [
-    ("yfinance", "yfinance", "comex_silver_report2.py (fallback price/settlements)"),
+    ("yfinance",   "yfinance",   "comex_silver_report2.py, fetch_dealer_prices.py (FX rates)"),
+    ("playwright", "playwright", "fetch_dealer_prices.py (dealer price scraping)"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -109,9 +116,21 @@ STEPS = [
     },
     {
         "num": 9,
+        "name": "GSR & Global Premiums",
+        "script": "fetch_gsr_premiums.py",
+        "description": "Fetch Gold/Silver Ratio and global physical premiums (SHFE, MCX)",
+    },
+    {
+        "num": 10,
+        "name": "Dealer Prices",
+        "script": "fetch_dealer_prices.py",
+        "description": "Scrape live 1oz silver bar prices per region (Royal Mint, BGASC, ABC Bullion, proaurum, SHFE); write dealer_prices_timeseries.csv",
+    },
+    {
+        "num": 11,
         "name": "Generate Plots",
         "script": "generate_plots.py",
-        "description": "Produce all plots (1–8) from time-series CSVs into comex_data/plots/",
+        "description": "Produce all plots (1–12) from time-series CSVs into comex_data/plots/",
     },
 ]
 
@@ -195,11 +214,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--skip", type=int, nargs="+", metavar="N",
-        help="Step number(s) to skip (1-8)",
+        help="Step number(s) to skip (1-11)",
     )
     parser.add_argument(
         "--only", type=int, nargs="+", metavar="N",
-        help="Run only these step number(s) (1-8)",
+        help="Run only these step number(s) (1-11)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
