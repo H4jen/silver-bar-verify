@@ -633,7 +633,8 @@ def main() -> int:
     return 0
 
 
-DEALER_PRICES_CSV = os.path.join(CACHE_DIR, "dealer_prices_timeseries.csv")
+DEALER_PRICES_CSV   = os.path.join(CACHE_DIR, "dealer_prices_timeseries.csv")
+DEALER_HISTORY_FILE = os.path.join(CACHE_DIR, "dealer_prices_history.json")
 
 # Region → CSV column name
 _REGION_COL = {
@@ -647,9 +648,59 @@ _REGION_COL = {
 CSV_COLUMNS = ["date", "lbma_spot_usd_oz", "avg_physical_usd_oz"] + list(_REGION_COL.values())
 
 
+# ---------------------------------------------------------------------------
+# History helpers  (mirrors gsr_premiums_history.json pattern)
+# ---------------------------------------------------------------------------
+
+def _load_dealer_history() -> list[dict]:
+    """Load dealer_prices_history.json; return [] if absent or corrupt."""
+    if not os.path.exists(DEALER_HISTORY_FILE):
+        return []
+    try:
+        with open(DEALER_HISTORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_dealer_history(history: list[dict]) -> None:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(DEALER_HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+
+def _upsert_dealer_history(row: dict) -> list[dict]:
+    """Insert or replace the entry for row['date'] in dealer_prices_history.json."""
+    history = _load_dealer_history()
+    date_key = row["date"]
+    history = [h for h in history if h.get("date") != date_key]
+    history.append(row)
+    history.sort(key=lambda h: h.get("date", ""))
+    _save_dealer_history(history)
+    return history
+
+
+def rebuild_dealer_timeseries_csv() -> None:
+    """Regenerate dealer_prices_timeseries.csv from dealer_prices_history.json.
+    Call this if the CSV is ever lost or corrupted."""
+    import csv
+    history = _load_dealer_history()
+    if not history:
+        print("  ⚠  dealer_prices_history.json is empty — nothing to rebuild")
+        return
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(DEALER_PRICES_CSV, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(history)
+    print(f"  CSV rebuilt from history ({len(history)} rows) → {DEALER_PRICES_CSV}")
+
+
 def _append_timeseries_csv(results: list[dict], lbma_usd: Optional[float]) -> None:
     """Append today's dealer prices to dealer_prices_timeseries.csv.
-    If a row for today already exists it is overwritten."""
+    If a row for today already exists it is overwritten.
+    Also upserts into dealer_prices_history.json for long-term reconstruction."""
     import csv
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -663,6 +714,10 @@ def _append_timeseries_csv(results: list[dict], lbma_usd: Optional[float]) -> No
     # Compute average across all physical dealer prices
     dealer_vals = [float(row[c]) for c in _REGION_COL.values() if row.get(c) not in ("", None)]
     row["avg_physical_usd_oz"] = round(sum(dealer_vals) / len(dealer_vals), 4) if dealer_vals else ""
+
+    # Persist to history JSON (source of truth for reconstruction)
+    _upsert_dealer_history(row)
+    print(f"  History JSON uppdaterad → {DEALER_HISTORY_FILE}")
 
     # Read existing rows, replace today's if present
     existing: list[dict] = []
