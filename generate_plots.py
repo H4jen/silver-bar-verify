@@ -41,6 +41,15 @@ plt.rcParams.update({
     "font.size":        11,
 })
 
+def _xlim_one_month(ax) -> None:
+    """Restrict the x-axis to ±1 month around today."""
+    today = date.today()
+    ax.set_xlim(
+        datetime(today.year, today.month, today.day) - timedelta(days=30),
+        datetime(today.year, today.month, today.day) + timedelta(days=30),
+    )
+
+
 COMEX_COLOR_REG  = "#1f77b4"   # blue
 COMEX_COLOR_ELIG = "#aec7e8"   # light blue
 COMEX_COLOR_COMB = "#2ca02c"   # green
@@ -1123,6 +1132,8 @@ def plot_gsr(gsr: pd.DataFrame | None) -> str | None:
     ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
     fig.autofmt_xdate(rotation=30, ha="right")
 
+    _xlim_one_month(ax)
+
     y_min = max(0, df["gsr"].min() - 5)
     y_max = df["gsr"].max() + 5
     ax.set_ylim(y_min, y_max)
@@ -1215,6 +1226,8 @@ def plot_global_premiums(gsr: pd.DataFrame | None) -> str | None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
     fig.autofmt_xdate(rotation=30, ha="right")
+
+    _xlim_one_month(ax)
 
     ax.set_ylabel("USD per troy oz")
     ax.set_xlabel("Datum")
@@ -1324,6 +1337,8 @@ def plot_premium_pct(dealer_df: pd.DataFrame | None) -> str | None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
     fig.autofmt_xdate(rotation=30, ha="right")
+
+    _xlim_one_month(ax)
 
     ax.set_ylabel("Premium vs COMEX spot (%)")
     ax.set_xlabel("Datum")
