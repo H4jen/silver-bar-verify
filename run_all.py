@@ -15,6 +15,7 @@ Wrapper script that runs the full pipeline in order:
   9) fetch_gsr_premiums.py    — fetch Gold/Silver Ratio and regional premiums
  10) fetch_dealer_prices.py   — scrape live dealer prices per region (Playwright)
  11) generate_plots.py        — produce all plots (1–12) from time-series CSVs
+ 12) generate_gallery.py      — generate HTML gallery index for the plots
 
 Designed to be run via cron.  Checks Python dependencies on startup
 and exits with a clear message if any are missing.
@@ -131,6 +132,12 @@ STEPS = [
         "name": "Generate Plots",
         "script": "generate_plots.py",
         "description": "Produce all plots (1–12) from time-series CSVs into comex_data/plots/",
+    },
+    {
+        "num": 12,
+        "name": "Generate Gallery",
+        "script": "generate_gallery.py",
+        "description": "Generate HTML gallery (index.html) for the plots in comex_data/plots/",
     },
 ]
 
